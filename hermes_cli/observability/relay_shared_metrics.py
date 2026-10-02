@@ -228,6 +228,10 @@ class _Runtime:
         # Guards the opt-in send pass: at most one in flight per process.
         self._send_lock = threading.RLock()
         self._send_thread: threading.Thread | None = None
+        # Guards the off-thread flush+export worker (see _export_off_thread).
+        self._export_lock = threading.Lock()
+        self._export_running = False
+        self._export_pending = False
         self._snapshot_checked_ns: int | None = None
         self._subscriber_name = f"{SUBSCRIBER_NAME}.{self.host.runtime_id}"
         self.subscriber = SharedMetricsSubscriber(
@@ -554,7 +558,7 @@ class _Runtime:
         if retired:
             self.close_session({"session_id": session.session_id})
         elif finished:
-            self._flush_and_export("Hermes shared-metrics task flush failed")
+            self._export_off_thread("Hermes shared-metrics task flush failed")
 
     def close_session(self, event: dict[str, Any]) -> None:
         session = self._session(event)
@@ -566,16 +570,10 @@ class _Runtime:
         ):
             return
         self._emit_session_summary(session)
-        try:
-            self.relay.subscribers.flush()
-        except Exception as exc:
-            logger.warning(
-                "Hermes shared-metrics session %s closed with errors: subscriber flush failed: %s",
-                session.session_id,
-                exc,
-            )
-        else:
-            self._export()
+        self._export_off_thread(
+            f"Hermes shared-metrics session {session.session_id} closed with errors: "
+            "subscriber flush failed"
+        )
         with self._sessions_lock:
             _forget(self._sessions, session.session_id, session)
 
@@ -669,6 +667,45 @@ class _Runtime:
         if task is not None:
             return self._run_in_task(task, callback, *args, **kwargs)
         return self.host.run_in_session(session.relay_session, callback, *args, **kwargs)
+
+    def _export_off_thread(self, failure_message: str) -> None:
+        """Flush and export without holding the caller.
+
+        ``subscribers.flush()`` is a process-wide barrier: it also waits for every managed
+        tool/LLM call already in flight in ANY session. Run on a turn or teardown thread, one
+        session finishing stalls behind another session's long tool or unanswered ``clarify``.
+        One worker per runtime (= per profile); triggers that land while it runs coalesce into
+        one more pass, which flushes everything emitted before them.
+        """
+        from agent.memory_provider import spawn_context_thread
+
+        with self._export_lock:
+            if self._export_running:
+                self._export_pending = True
+                return
+            self._export_running = True
+        try:
+            spawn_context_thread(
+                self._export_worker, name="hermes-shared-metrics-export", args=(failure_message,)
+            ).start()
+        except BaseException:
+            with self._export_lock:
+                self._export_running = False
+            raise
+
+    def _export_worker(self, failure_message: str) -> None:
+        try:
+            while True:
+                self._flush_and_export(failure_message)
+                with self._export_lock:
+                    if not self._export_pending:
+                        self._export_running = False
+                        return
+                    self._export_pending = False
+        except BaseException:
+            with self._export_lock:
+                self._export_running = False
+            raise
 
     def _flush_and_export(self, failure_message: str) -> None:
         """Flush the Relay subscriber, then export; a failed flush skips the export."""
