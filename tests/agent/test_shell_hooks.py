@@ -61,6 +61,9 @@ def test_interpreter_script_stays_relative_to_working_directory(tmp_path, monkey
     assert shell_hooks.script_is_executable("python hook.py")
     assert shell_hooks.script_mtime_iso("python hook.py") == shell_hooks.script_mtime_iso(str(script))
     assert not shell_hooks.script_is_executable("hook.py")
+    script = script.rename(tmp_path / "hook with spaces.py")
+    assert not shell_hooks.script_is_executable(f'"{script}"')
+    assert shell_hooks.script_is_executable(f'python "{script}"')
 
 
 @pytest.fixture(autouse=True)

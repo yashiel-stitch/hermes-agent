@@ -636,7 +636,7 @@ def script_is_executable(command: str) -> bool:
         argv = split_command_line(command) if path and os.path.isfile(expanded) else None
     except ValueError:
         return False
-    return argv is not None and os.access(expanded, os.X_OK if argv and _command_script_path(argv[0]) == path else os.R_OK)
+    return argv is not None and os.access(expanded, os.X_OK if argv and argv[0] == path else os.R_OK)
 
 
 def run_once(spec: ShellHookSpec, kwargs: Dict[str, Any]) -> Dict[str, Any]:
