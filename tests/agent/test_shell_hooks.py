@@ -9,6 +9,7 @@ covered in ``test_shell_hooks_consent.py``.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,45 @@ def _write_script(tmp_path: Path, name: str, body: str) -> Path:
     path.write_text(body)
     path.chmod(0o755)
     return path
+
+
+@pytest.mark.platforms("posix")
+def test_path_command_introspection_matches_execution(tmp_path, monkeypatch):
+    script = _write_script(tmp_path, "hook-handler", "#!/bin/sh\nprintf '{}'\n")
+    monkeypatch.setenv("PATH", str(tmp_path))
+    command = f"{script.name} --check"
+    spec = shell_hooks.ShellHookSpec(event="on_session_start", command=command)
+
+    assert shell_hooks.run_once(spec, {})["returncode"] == 0
+    assert shell_hooks.script_is_executable(command)
+    shell_hooks._record_approval(spec.event, command)
+    entry = shell_hooks.allowlist_entry_for(spec.event, command)
+    assert entry["command"] == command
+    assert entry["script_mtime_at_approval"] == shell_hooks.script_mtime_iso(str(script))
+    os.utime(script, (script.stat().st_atime, script.stat().st_mtime + 10))
+    assert shell_hooks.script_mtime_iso(command) > entry["script_mtime_at_approval"]
+
+    script.chmod(0o644)
+    assert not shell_hooks.script_is_executable(command)
+    script.unlink()
+    assert not shell_hooks.script_is_executable(command)
+    assert shell_hooks.script_mtime_iso(command) is None
+
+
+@pytest.mark.platforms("posix")
+def test_interpreter_script_stays_relative_to_working_directory(tmp_path, monkeypatch):
+    script = tmp_path / "hook.py"
+    script.write_text("print('{}')\n", encoding="utf-8")
+    script.chmod(0o644)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PATH", "")
+
+    assert shell_hooks.script_is_executable("python hook.py")
+    assert shell_hooks.script_mtime_iso("python hook.py") == shell_hooks.script_mtime_iso(str(script))
+    assert not shell_hooks.script_is_executable("hook.py")
+    script = script.rename(tmp_path / "hook with spaces.py")
+    assert not shell_hooks.script_is_executable(f'"{script}"')
+    assert shell_hooks.script_is_executable(f'python "{script}"')
 
 
 @pytest.fixture(autouse=True)

@@ -590,8 +590,17 @@ def _command_script_path(command: str) -> str:
         parts = split_command_line(command) or [command]
     except ValueError:
         return command
-    return (next((p for p in parts if p.lower().endswith(_SCRIPT_EXTENSIONS)), None)
+    path = (next((p for p in parts if p.lower().endswith(_SCRIPT_EXTENSIONS)), None)
             or next((p for p in parts if "/" in p or p.startswith("~")), None) or parts[0])
+    if path == parts[0] and not any(c in path for c in "/\\~"):
+        from agent.secret_scope import is_multiplex_active
+        from hermes_platform.resolver import LookupContext, locate_command
+        from tools.environments.local import build_subprocess_env
+
+        env = build_subprocess_env(scrub_secrets=is_multiplex_active())
+        resolved = locate_command(path, LookupContext(path=os.pathsep.join(os.get_exec_path(env))))
+        return resolved.command[0] if resolved.found else ""
+    return path
 
 
 def _resolve_effective_accept(cfg: Dict[str, Any], accept_hooks_arg: bool) -> bool:
