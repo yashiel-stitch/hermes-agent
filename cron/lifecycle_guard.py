@@ -363,6 +363,7 @@ _BINARY_MAGICS = (
     b"!<arch>",              # static archive (.a)
     b"\x1f\x8b",             # gzip
     b"PK\x03\x04",           # zip (also .jar/.whl/.egg)
+    b"SQLite format 3\x00",  # SQLite database; NUL at byte 15, before any newline
 )
 
 
@@ -955,7 +956,7 @@ def _iter_shell_command_payloads(command: str) -> Iterator[str]:
 # --- referenced-script reading ----------------------------------------------------------------
 
 def _has_binary_magic(data: bytes) -> bool:
-    """True when *data* starts with a known compiled-binary signature. Deliberately narrower than
+    """True when *data* starts with a known non-script signature. Deliberately narrower than
     "contains a NUL": ``bash`` still executes a NUL-bearing script, so a padded script must not
     bypass the scan. A shebang always wins (interpreted, never binary). Extensions are not
     consulted: a suffixless script must still be scanned and fail closed if oversized."""
