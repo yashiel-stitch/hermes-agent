@@ -684,6 +684,7 @@ class OpenAICompatRoutesMixin:
         # X-Hermes-Session-Id continues an existing session (history from state.db, not the body);
         # requires a configured API key or any client could read history by guessing ids.
         provided_session_id = request.headers.get("X-Hermes-Session-Id", "").strip()
+        _declared_selected = not provided_session_id and bool(gateway_session_key)
         if provided_session_id:
             if not self._api_key:
                 logger.warning(
@@ -718,7 +719,9 @@ class OpenAICompatRoutesMixin:
             # one Hermes session; namespaced by the routed profile (#123989).
             first_user = next(
                 (cm.get("content", "") for cm in conversation_messages if cm.get("role") == "user"), "")
-            session_id = _derive_chat_session_id(system_prompt, first_user, _api_request_profile.get())
+            session_id = (
+                await asyncio.to_thread(self._declared_conversation_session, gateway_session_key)
+                or _derive_chat_session_id(system_prompt, first_user, _api_request_profile.get()))
         completion_id = f"chatcmpl-{uuid.uuid4().hex[:29]}"
         model_name = body.get("model", self._model_name)
         created = int(time.time())
@@ -730,7 +733,8 @@ class OpenAICompatRoutesMixin:
         run_kwargs = dict(
             user_message=user_message, conversation_history=history,
             ephemeral_system_prompt=system_prompt, session_id=session_id,
-            gateway_session_key=gateway_session_key, **agent_overrides, route=route,
+            gateway_session_key=gateway_session_key, bind_declared_conversation=_declared_selected,
+            **agent_overrides, route=route,
             relay_metadata=relay_metadata,
             # #98619: only an explicitly provided X-Hermes-Session-Id is wake-capable (the
             # header is 403-gated on API_SERVER_KEY, so the wake self-post can authenticate
