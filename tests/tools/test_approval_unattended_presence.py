@@ -49,3 +49,27 @@ def test_api_server_asks_only_when_a_client_bridge_is_registered(unattended_sess
     # /v1/runs and streaming chat completions register a notifier: the approval bridge keeps the card.
     approval_mod.register_gateway_notify(SESSION, lambda data: None)
     assert approval_mod._presence()[3] is True
+
+
+@pytest.mark.parametrize("platform", ["api_server", "webhook", "msgraph_webhook"])
+@pytest.mark.parametrize("unattended_mode", ["deny", "approve"])
+def test_unattended_execute_code_stays_denied(
+        unattended_session, monkeypatch, platform, unattended_mode):
+    unattended_session(platform)
+    monkeypatch.setattr(approval_context, "_get_unattended_approval_mode", lambda: unattended_mode)
+    result = approval_mod.check_execute_code_guard("import subprocess", "local")
+    assert result["approved"] is False
+    assert result["pattern_key"] == "execute_code"
+    assert "subprocess" in result["message"]
+
+
+def test_api_server_terminal_approval_reloads_config(unattended_session):
+    from hermes_cli.config import get_config_path
+
+    unattended_session("api_server")
+    config_path = get_config_path()
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    for mode in ("deny", "approve"):
+        config_path.write_text(f"approvals:\n  unattended_mode: {mode}\n", encoding="utf-8")
+        result = approval_mod.check_all_command_guards("git branch -D x", "local")
+        assert result["approved"] is (mode == "approve")
