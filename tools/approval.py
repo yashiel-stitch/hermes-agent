@@ -1209,7 +1209,7 @@ def check_execute_code_guard(code: str, env_type: str, has_host_access: bool = F
     # No user is present to approve arbitrary code in -q / cron / unattended
     # sessions: the first active context resolves instantly from its mode.
     for ctx in _unattended_contexts():
-        if ctx.mode() == "deny":
+        if ctx.name == "unattended" or ctx.mode() == "deny":
             return _denied(
                 "BLOCKED: execute_code runs arbitrary local Python (including "
                 "subprocess calls that bypass shell-string approval checks). " + ctx.exec_tail,
