@@ -509,3 +509,30 @@ class TestSandboxBrowserPerContainer:
         assert fake_containers.killed == [(first, pids[first])]
         lifecycle.cleanup_single_session("s2")
         assert fake_containers.killed == [(first, pids[first]), (second, pids[second])]
+
+
+def test_final_endpoint_cleanup_stops_its_supervisor_aliases_only(monkeypatch):
+    from tools.browser_supervisor import SUPERVISOR_REGISTRY
+
+    stopped = []
+    endpoint = "ws://127.0.0.1:58645/devtools/browser/test"
+    sessions = {
+        "bu-named-main@home-a": {"cdp_url": endpoint, "home_key": "home-a"},
+        "task@home-a::local": {"cdp_url": endpoint, "home_key": "home-a"},
+    }
+    supervisors = {
+        "task": SimpleNamespace(cdp_url=endpoint, stop=lambda: stopped.append("task")),
+        "other-profile": SimpleNamespace(cdp_url=endpoint, stop=lambda: stopped.append("other-profile")),
+        "other-endpoint": SimpleNamespace(cdp_url="ws://other", stop=lambda: stopped.append("other-endpoint")),
+    }
+    monkeypatch.setattr(bs, "_active_sessions", sessions)
+    monkeypatch.setattr(SUPERVISOR_REGISTRY, "_by_task", supervisors)
+    monkeypatch.setattr(SUPERVISOR_REGISTRY, "_home_by_task", {
+        "task": "home-a", "other-profile": "home-b", "other-endpoint": "home-a",
+    })
+
+    lifecycle.cleanup_single_session("bu-named-main@home-a")
+    assert stopped == []
+    lifecycle.cleanup_single_session("task@home-a::local")
+    assert stopped == ["task"]
+    assert set(supervisors) == {"other-profile", "other-endpoint"}

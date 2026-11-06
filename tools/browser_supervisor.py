@@ -557,6 +557,16 @@ class _SupervisorRegistry:
         if supervisor is not None:
             supervisor.stop()
 
+    def stop_endpoint(self, cdp_url: str, home_key: str) -> None:
+        with self._lock:
+            tasks = [task for task, supervisor in self._by_task.items()
+                     if supervisor.cdp_url == cdp_url and self._home_by_task.get(task) == home_key]
+            supervisors = [self._by_task.pop(task) for task in tasks]
+            for task in tasks:
+                self._home_by_task.pop(task, None)
+        for supervisor in supervisors:
+            supervisor.stop()
+
     def stop_home(self, home_key: str) -> None:
         """Stop the supervisors one profile home started (``/browser connect`` on a multiplexed gateway)."""
         with self._lock:

@@ -128,6 +128,14 @@ def _close_cloud_session(session_info: dict[str, Any]) -> None:
 
 def release_session_backend(cache_key: str, session_info: dict[str, Any]) -> None:
     """Release ``session_info``'s browser BY OBJECT (an unpublished session releases through this alone)."""
+    bs = _bs()
+    cdp_url, home_key = session_info.get("cdp_url"), session_info.get("home_key")
+    with bs._cleanup_lock:
+        endpoint_in_use = any(info.get("cdp_url") == cdp_url and info.get("home_key") == home_key
+                              for info in bs._active_sessions.values())
+    if cdp_url and home_key and not endpoint_in_use:
+        from tools.browser_supervisor import SUPERVISOR_REGISTRY
+        _best_effort("CDP endpoint supervisor stop", lambda: SUPERVISOR_REGISTRY.stop_endpoint(cdp_url, home_key))
     _close_cloud_session(session_info)
     features = session_info.get("features") or {}
     if features.get("lightpanda"):
