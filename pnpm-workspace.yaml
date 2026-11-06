@@ -34,6 +34,8 @@ minimumReleaseAgeExclude:
   - '@radix-ui/*'
   - radix-ui
   - safe-content-frame
+  - joi
+  - follow-redirects
 
   # react-router 8.3.0 includes fixes for vulns. remove this when 8.3.0 is > 2wks old.
   - react-router
@@ -99,6 +101,8 @@ minimumReleaseAgeExclude:
 overrides:
   '@electron/osx-sign>isbinaryfile': 5.0.7
   lodash: 4.18.1
+  joi@^18: 18.3.1
+  follow-redirects: 1.16.2
   protobufjs: '^8.7.1'
   brace-expansion: 5.0.12
   dompurify: 3.4.17
