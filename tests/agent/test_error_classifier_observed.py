@@ -11,6 +11,7 @@ recovery chain retries it once with the lowered cap (see that test's docstring).
 
 from __future__ import annotations
 
+import anthropic
 import httpx
 import openai
 import pytest
@@ -87,3 +88,15 @@ def test_affordable_402_classifies_as_billing_with_a_parseable_budget():
 def test_not_a_multimodal_model_is_an_image_rejection():
     body = str(_status(openai.BadRequestError, 400, NOT_MULTIMODAL_400))
     assert _looks_like_image_content_rejection(body), f"image rejection not recognised: {body[:120]}"
+
+
+def test_anthropic_missing_model_falls_back_without_retrying():
+    body = {"type": "error", "error": {"type": "not_found_error", "message": "model: gpt-6-1-sol"}}
+    error = _status(anthropic.NotFoundError, 404, body)
+    result = classify_api_error(error, provider="anthropic", model="gpt-6-1-sol")
+    assert (result.reason, result.retryable, result.should_fallback) == (
+        FailoverReason.model_not_found, False, True,
+    )
+    body["error"]["message"] = "resource not found"
+    result = classify_api_error(_status(anthropic.NotFoundError, 404, body), provider="anthropic", model="gpt-6-1-sol")
+    assert (result.reason, result.retryable, result.should_fallback) == (FailoverReason.unknown, True, False)

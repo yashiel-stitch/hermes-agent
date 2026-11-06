@@ -1140,6 +1140,10 @@ def _status_404(c: _Ctx) -> Verdict:
     # so _by_error_code never sees it; a bare "Not Found" message has nothing to match.
     if c.code in _BILLING_ERROR_CODES:
         return _V_BILLING
+    error = _error_obj(c.body)
+    if (c.provider_slug == "anthropic" and error.get("type") == "not_found_error"
+            and c.model and error.get("message") == f"model: {c.model}"):
+        return _V_MODEL_NOT_FOUND
     verdict = _first_match(c.msg, _404_RULES)
     if verdict is not None:
         return verdict
