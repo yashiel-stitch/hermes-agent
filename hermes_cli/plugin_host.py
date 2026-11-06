@@ -52,6 +52,23 @@ _RESTART_BUDGET = 3
 _RESTART_WINDOW_SECS = 600.0
 
 
+def _hosted_ambient_credentials(home: Path) -> dict[str, str]:
+    """``env_vars`` of this home's hosted ``ambient_credentials`` providers (``GH_TOKEN``-style names the
+    child-env scrub always strips), read the way that provider reads them in-process: ``get_secret``
+    under the home's scope, so the launch home keeps its shell value and a routed home never gets it."""
+    from agent.secret_scope import build_profile_secret_scope, get_secret, reset_secret_scope, set_secret_scope
+    from hermes_cli.plugin_host_profiles import is_hosted_profile
+    from providers import list_providers
+    names = {name for p in list_providers() if p.ambient_credentials and is_hosted_profile(p) for name in p.env_vars}
+    if not names:
+        return {}
+    token = set_secret_scope(build_profile_secret_scope(home), profile_home=str(home))
+    try:
+        return {name: value for name in sorted(names) if (value := get_secret(name))}
+    finally:
+        reset_secret_scope(token)
+
+
 class PluginHost:
     """One host process for one :class:`~hermes_cli.plugins.PluginManager` (one profile home)."""
 
@@ -110,6 +127,7 @@ class PluginHost:
     def _env(self) -> dict[str, str]:
         from tools.environments.local import served_profile_child_env
         env = self._base_context.run(served_profile_child_env, target_home=self._home, inherit_credentials=True)
+        env.update(self._base_context.run(_hosted_ambient_credentials, self._home))
         repo_root = str(Path(__file__).resolve().parents[1])
         env["PYTHONPATH"] = os.pathsep.join(p for p in (repo_root, env.get("PYTHONPATH", "")) if p)
         env.setdefault("HERMES_PLUGIN_HOST_LOG_LEVEL", "WARNING")
@@ -208,8 +226,9 @@ class PluginHost:
     def load(self, manifest: Any, ctx: Any, *, module_name: Optional[str], entrypoint: bool) -> str:
         """Import ``manifest``'s plugin in the host and replay its registrations onto ``ctx``."""
         from hermes_cli.plugins import PluginContext, manifest_key
-        channel = self.ensure_started()
         plugin_key = manifest_key(manifest)
+        # Claimed before ensure_started() can block on a host start, so a load abandoned at its deadline there
+        # cannot take the key back from a newer load of this plugin when it resumes (see the except branch).
         self._contexts[plugin_key] = ctx
         params = {
             "plugin_key": plugin_key, "plugin_id": ctx.plugin_id, "name": manifest.name,
@@ -220,11 +239,21 @@ class PluginHost:
                 "data_namespace")},
             "ctx_methods": sorted(n for n in dir(PluginContext) if not n.startswith("_")),
         }
-        self._loading = plugin_key
         try:
+            channel = self.ensure_started()
+            self._loading = plugin_key
             result = channel.call("load", params)
         except BaseException:
-            self._contexts.pop(plugin_key, None)
+            # register() may have queued host-side on_unload callbacks before raising: run them, as
+            # the in-process failure path does, so the failed load leaves nothing behind in the host.
+            # Only while this load still owns the key: a deadline-abandoned load can fail after a newer
+            # load of the same plugin took it over, and the host's state is keyed by plugin, not load.
+            # Best effort: a failing cleanup must not replace the load error being re-raised.
+            if self._contexts.get(plugin_key) is ctx:
+                try:
+                    self._unload(plugin_key)
+                except Exception:
+                    logger.warning("Plugin '%s' cleanup after a failed load failed", plugin_key, exc_info=True)
             raise
         finally:
             self._loading = None
