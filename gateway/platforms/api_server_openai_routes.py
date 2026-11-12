@@ -935,11 +935,10 @@ class OpenAICompatRoutesMixin:
             first_user = next(
                 (cm.get("content", "") for cm in conversation_messages if cm.get("role") == "user"), "")
             session_id = await asyncio.to_thread(self._declared_conversation_session, gateway_session_key)
-            if not session_id:
-                session_id = _derive_chat_session_id(system_prompt, first_user, _api_request_profile.get())
-                session_id, lookup_error = await self._implicit_chat_session(request, session_id)
-                if lookup_error is not None:
-                    return lookup_error
+            session_id, lookup_error = (session_id, None) if session_id else await self._implicit_chat_session(
+                request, _derive_chat_session_id(system_prompt, first_user, _api_request_profile.get()))
+            if lookup_error is not None:
+                return lookup_error
         completion_id = f"chatcmpl-{uuid.uuid4().hex[:29]}"
         model_name = body.get("model", self._model_name)
         created = int(time.time())
