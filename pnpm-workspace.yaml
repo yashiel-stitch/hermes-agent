@@ -35,6 +35,7 @@ minimumReleaseAge: 20160
 minimumReleaseAgeExclude:
   - joi@18.3.1
   - follow-redirects@1.16.2
+  - electron@44.10.2  # CVE-2026-111497 (Node2Shell, CISA KEV): 44.9.3 bundles vulnerable Node 24.22.0; 44.10.2 bundles 24.22.2
   - pele@1.13.0  # the desktop diagram swap was parity-checked on it (math labels need 1.8.0+)
 
 overrides:
