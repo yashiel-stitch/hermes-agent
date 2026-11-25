@@ -6,18 +6,19 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from gateway.config import PlatformConfig
 from gateway.platforms.api_server import APIServerAdapter, _derive_chat_session_id
-from hermes_state import SessionDB
+from tests.fixtures.storage_read import session_row
+from tests.fixtures.storage_seed import seed_session
 
 KEY = "openwebui:chat-session"
 
 
 @pytest.fixture
-def chat_server(tmp_path):
+def chat_server(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     adapter = APIServerAdapter(
         PlatformConfig(enabled=True, extra={"host": "127.0.0.1", "port": 0, "key": "test-key"})
     )
-    db = SessionDB(tmp_path / "state.db")
-    adapter._session_db = db
+    db = adapter._ensure_store()
     created = []
     turns = []
 
@@ -32,8 +33,8 @@ def chat_server(tmp_path):
 
         def run_conversation(**turn):
             turns.append(turn)
-            if db.get_session(session_id) is None:
-                db.create_session(session_id=session_id, source="api_server", model="m")
+            if db.sessions.get(session_id) is None:
+                seed_session(db, session_id, "api_server", model="m")
             return {"final_response": "ok", "messages": [], "api_calls": 1}
 
         agent.run_conversation.side_effect = run_conversation
@@ -45,7 +46,7 @@ def chat_server(tmp_path):
     try:
         yield adapter, db, app, created, turns
     finally:
-        db.close()
+        adapter._close_cached_session_dbs()
 
 
 @pytest.mark.asyncio
@@ -53,8 +54,8 @@ def chat_server(tmp_path):
 @pytest.mark.parametrize("selection", ["declared", "explicit", "undeclared"])
 async def test_chat_session_precedence_preserves_history(chat_server, stream, selection):
     adapter, db, app, created, turns = chat_server
-    db.create_session(session_id="responses-session", source="api_server", model="m")
-    db.record_gateway_session_peer("responses-session", source="api_server", session_key=KEY)
+    seed_session(db, "responses-session", "api_server", model="m")
+    db.routing.record_session_peer("responses-session", source="api_server", session_key=KEY)
     headers = {"Authorization": "Bearer test-key"}
     expected = "responses-session"
     history = [{"role": "user", "content": "first"}, {"role": "assistant", "content": "reply"}]
@@ -64,7 +65,7 @@ async def test_chat_session_precedence_preserves_history(chat_server, stream, se
         expected = _derive_chat_session_id(None, "first", None)
     if selection == "explicit":
         headers["X-Hermes-Session-Id"] = expected = "explicit-session"
-        db.create_session(session_id=expected, source="api_server", model="m")
+        seed_session(db, expected, "api_server", model="m")
         history = []
     async with TestClient(TestServer(app)) as client:
         response = await client.post(
@@ -83,7 +84,7 @@ async def test_chat_session_precedence_preserves_history(chat_server, stream, se
     assert turns[0]["conversation_history"] == history
     assert adapter._declared_conversation_session(KEY) == "responses-session"
     if selection == "explicit":
-        assert not db.get_session(expected)["session_key"]
+        assert not session_row(db, expected)["session_key"]
 
 
 @pytest.mark.asyncio
@@ -100,5 +101,5 @@ async def test_unknown_declared_key_binds_fingerprint_session(chat_server, strea
         assert response.status == 200
         await response.read()
     assert created[0]["session_id"] == expected
-    assert db.get_session(expected)["session_key"] == KEY
+    assert session_row(db, expected)["session_key"] == KEY
     assert adapter._declared_conversation_session(KEY) == expected
